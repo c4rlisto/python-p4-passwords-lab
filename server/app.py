@@ -1,43 +1,69 @@
-#!/usr/bin/env python3
+# server/app.py
 
-from flask import request, session
-from flask_restful import Resource
+from flask import Flask, jsonify, request, session
+from flask_sqlalchemy import SQLAlchemy
+from flask_bcrypt import Bcrypt
+from config import Config
 
-from config import app, db, api
-from models import User
+# Initialize Flask app and other components
+app = Flask(__name__)
+app.config.from_object(Config)
+db = SQLAlchemy(app)
+bcrypt = Bcrypt(app)
 
-class ClearSession(Resource):
+# Define User model
+class User(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    username = db.Column(db.String(120), unique=True, nullable=False)
+    password = db.Column(db.String(60), nullable=False)
 
-    def delete(self):
-    
-        session['page_views'] = None
-        session['user_id'] = None
+# Route to handle signup
+@app.route('/signup', methods=['POST'])
+def signup():
+    data = request.get_json()
+    username = data.get('username')
+    password = data.get('password')
+    password_hash = bcrypt.generate_password_hash(password).decode('utf-8')
 
-        return {}, 204
+    # Create new user
+    new_user = User(username=username, password=password_hash)
+    db.session.add(new_user)
+    db.session.commit()
 
-class Signup(Resource):
-    
-    def post(self):
-        json = request.get_json()
-        user = User(
-            username=json['username']
-        )
-        user.password_hash = json['password']
-        db.session.add(user)
-        db.session.commit()
-        return user.to_dict(), 201
+    # Store user id in session
+    session['user_id'] = new_user.id
 
-class CheckSession(Resource):
-    pass
+    return jsonify({'id': new_user.id, 'username': new_user.username}), 201
 
-class Login(Resource):
-    pass
+# Route to handle login
+@app.route('/login', methods=['POST'])
+def login():
+    data = request.get_json()
+    username = data.get('username')
+    password = data.get('password')
 
-class Logout(Resource):
-    pass
+    user = User.query.filter_by(username=username).first()
 
-api.add_resource(ClearSession, '/clear', endpoint='clear')
-api.add_resource(Signup, '/signup', endpoint='signup')
+    if user and bcrypt.check_password_hash(user.password, password):
+        session['user_id'] = user.id
+        return jsonify({'id': user.id, 'username': user.username}), 200
+    else:
+        return jsonify({'message': 'Invalid credentials'}), 401
+
+# Route to handle logout
+@app.route('/logout', methods=['DELETE'])
+def logout():
+    session.pop('user_id', None)
+    return jsonify({'message': 'Logged out successfully'}), 200
+
+# Route to check if the user is authenticated
+@app.route('/check_session', methods=['GET'])
+def check_session():
+    if 'user_id' in session:
+        user = User.query.get(session['user_id'])
+        return jsonify({'id': user.id, 'username': user.username}), 200
+    else:
+        return '', 204  # No content if not authenticated
 
 if __name__ == '__main__':
-    app.run(port=5555, debug=True)
+    app.run(debug=True)
